@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trust Account Three-Way Reconciliation</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<header class="app-header">
+  <div>
+    <h1>Trust Account Three-Way Reconciliation</h1>
+    <div class="subtitle">Georgia Real Estate Commission · GREC Rule 520-1-.08</div>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- ── Input Form ── -->
+  <form id="reconcile-form" enctype="multipart/form-data">
+
+    <!-- Firm info -->
+    <div class="card">
+      <div class="card-title">
+        <span class="step-badge">1</span>
+        Practice Information
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="firm_name">Firm / Attorney Name</label>
+          <input type="text" id="firm_name" name="firm_name" placeholder="Smith Real Estate Law, LLC" />
+        </div>
+        <div class="form-group">
+          <label for="account_name">Trust Account Name</label>
+          <input type="text" id="account_name" name="account_name" value="Trust Account" />
+        </div>
+        <div class="form-group">
+          <label for="month_year">Reconciliation Period</label>
+          <input type="month" id="month_year" name="month_year" required />
+        </div>
+      </div>
+    </div>
+
+    <!-- File uploads -->
+    <div class="card">
+      <div class="card-title">
+        <span class="step-badge">2</span>
+        Upload Source Files
+      </div>
+      <div class="upload-grid">
+
+        <div class="upload-zone" id="zone-qb">
+          <input type="file" name="quickbooks_file" accept=".csv,.xlsx,.xls" required />
+          <div class="upload-icon">📊</div>
+          <div class="upload-label">QuickBooks</div>
+          <div class="upload-hint">Trust account register export<br/>CSV or Excel</div>
+          <div class="upload-filename"></div>
+        </div>
+
+        <div class="upload-zone" id="zone-bank">
+          <input type="file" name="bank_file" accept=".csv,.xlsx,.xls,.pdf" required />
+          <div class="upload-icon">🏦</div>
+          <div class="upload-label">Bank Statement</div>
+          <div class="upload-hint">Monthly statement<br/>PDF, CSV, or Excel</div>
+          <div class="upload-filename"></div>
+        </div>
+
+        <div class="upload-zone" id="zone-qualia">
+          <input type="file" name="qualia_file" accept=".csv,.xlsx,.xls" required />
+          <div class="upload-icon">🏠</div>
+          <div class="upload-label">Qualia</div>
+          <div class="upload-hint">Trust ledger / escrow balance<br/>CSV or Excel</div>
+          <div class="upload-filename"></div>
+        </div>
+
+      </div>
+
+      <p style="font-size:.82rem;color:var(--muted);margin-bottom:12px;">
+        <strong>QuickBooks:</strong> Reports → Account QuickReport for your trust account → Export to Excel/CSV<br/>
+        <strong>Bank:</strong> Download your monthly statement PDF or CSV from your bank's portal<br/>
+        <strong>Qualia:</strong> Reports → Trust Ledger / Escrow Balance Summary → Export
+      </p>
+    </div>
+
+    <!-- Manual adjustments -->
+    <div class="card">
+      <div class="card-title">
+        <span class="step-badge">3</span>
+        Bank Adjustments
+      </div>
+      <p style="font-size:.88rem;color:var(--muted);margin-bottom:14px;">
+        Enter items that appear in your books but not yet on the bank statement (or vice versa).
+        Leave at $0 if none.
+      </p>
+      <div class="adjustments">
+        <div class="form-group">
+          <label for="deposits_in_transit">Deposits in Transit ($)</label>
+          <input type="number" id="deposits_in_transit" name="deposits_in_transit"
+                 value="0" min="0" step="0.01" />
+          <div class="adj-note">Deposits recorded in QuickBooks but not yet shown on bank statement</div>
+        </div>
+        <div class="form-group">
+          <label for="outstanding_checks">Outstanding Checks ($)</label>
+          <input type="number" id="outstanding_checks" name="outstanding_checks"
+                 value="0" min="0" step="0.01" />
+          <div class="adj-note">Checks issued but not yet cleared the bank</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Submit -->
+    <div id="error-box" class="error-box hidden"></div>
+
+    <div class="btn-row">
+      <button type="submit" id="submit-btn" class="btn btn-primary">
+        <div id="spinner" class="spinner"></div>
+        Run Reconciliation
+      </button>
+    </div>
+
+  </form>
+
+  <!-- ── Results ── -->
+  <section id="results" class="hidden" style="margin-top:32px;">
+
+    <div id="status-banner" class="status-banner"></div>
+
+    <!-- Comparison cards -->
+    <div class="comparison-grid">
+      <div id="card-bank" class="compare-card"></div>
+      <div id="card-qb" class="compare-card"></div>
+      <div id="card-qualia" class="compare-card"></div>
+    </div>
+
+    <!-- Part 1 — Bank -->
+    <div class="card recon-section">
+      <h3>Part 1 — Bank Statement Balance</h3>
+      <table class="recon-table">
+        <tbody>
+          <tr>
+            <td>Bank Statement Ending Balance</td>
+            <td id="bank-ending"></td>
+          </tr>
+          <tr>
+            <td class="label-indent">+ Deposits in Transit</td>
+            <td id="bank-dit"></td>
+          </tr>
+          <tr>
+            <td class="label-indent">− Outstanding Checks</td>
+            <td id="bank-oc"></td>
+          </tr>
+          <tr class="total-row">
+            <td>= Adjusted Bank Balance</td>
+            <td id="bank-adjusted"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Part 2 — QuickBooks -->
+    <div class="card recon-section">
+      <h3>Part 2 — QuickBooks Book Balance</h3>
+      <table class="recon-table">
+        <tbody>
+          <tr class="total-row">
+            <td>Trust Account Balance per QuickBooks</td>
+            <td id="qb-balance"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Part 3 — Qualia -->
+    <div class="card recon-section">
+      <h3>Part 3 — Qualia Client Ledger Total</h3>
+      <table class="recon-table">
+        <tbody>
+          <tr class="total-row">
+            <td>Total of <span id="qualia-count">0</span> Client Ledger Balance(s)</td>
+            <td id="qualia-total"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Discrepancies -->
+    <div id="discrepancy-section" class="card hidden">
+      <div class="card-title" style="color:var(--danger);">⚠ Discrepancies</div>
+      <ul id="discrepancy-list" class="discrepancy-list"></ul>
+      <p style="font-size:.83rem;color:var(--muted);margin-top:10px;">
+        All discrepancies must be identified, explained, and resolved before the reconciliation is complete.
+        Georgia law requires trust account reconciliations to be completed within 10 days after receipt
+        of the bank statement.
+      </p>
+    </div>
+
+    <!-- Client ledger detail -->
+    <div id="ledger-section" class="card hidden">
+      <div class="card-title">Qualia Client Ledger Detail</div>
+      <div style="overflow-x:auto;">
+        <table class="ledger-table">
+          <thead>
+            <tr>
+              <th>File #</th>
+              <th>Client / Party</th>
+              <th>Property</th>
+              <th>Balance</th>
+            </tr>
+          </thead>
+          <tbody id="ledger-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Export -->
+    <div class="card" style="background:#f8fafc;">
+      <div class="card-title">Export Reconciliation</div>
+      <div class="btn-row">
+        <button id="btn-pdf" class="btn btn-primary">⬇ Download PDF Report</button>
+        <button id="btn-csv" class="btn btn-outline">⬇ Download CSV</button>
+      </div>
+      <p style="font-size:.8rem;color:var(--muted);margin-top:10px;">
+        The PDF report includes a signature block for the preparing attorney and reviewer,
+        suitable for your compliance file.
+      </p>
+    </div>
+
+  </section>
+</main>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
