@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trust Account Three-Way Reconciliation</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<header class="app-header">
+  <h1>Trust Account Three-Way Reconciliation</h1>
+  <span class="subtitle">Bank statement &middot; QuickBooks &middot; Qualia client ledgers &mdash; all data stays on this computer</span>
+</header>
+
+<div class="toolbar">
+  <label>Account name
+    <input type="text" id="account-name" placeholder="e.g. IOLTA Trust – Truist ...1234">
+  </label>
+  <label>Statement end date
+    <input type="date" id="statement-date">
+  </label>
+  <span class="spacer"></span>
+  <button class="btn secondary" id="btn-load-sample">Load sample data</button>
+  <button class="btn secondary" id="btn-save-session">Save session file</button>
+  <button class="btn secondary" id="btn-load-session">Open session file</button>
+  <input type="file" id="session-file-input" accept=".json" hidden>
+  <button class="btn danger" id="btn-clear">Clear all</button>
+</div>
+
+<nav class="tabs">
+  <button data-tab="bank" class="active">1. Bank Statement <span class="badge" id="badge-bank">0</span></button>
+  <button data-tab="book">2. QuickBooks <span class="badge" id="badge-book">0</span></button>
+  <button data-tab="qualia">3. Qualia Ledgers <span class="badge" id="badge-qualia">0</span></button>
+  <button data-tab="reconcile">4. Reconciliation</button>
+  <button data-tab="report">5. Report</button>
+</nav>
+
+<main>
+
+  <!-- ============ BANK ============ -->
+  <section class="tab-panel active" id="panel-bank">
+    <h2>Bank statement</h2>
+    <p class="hint">Enter the ending balance from the trust account bank statement, then import the
+       statement transactions (CSV export from your bank's website) or add them by hand.
+       Deposits are positive; checks, wires out, and other withdrawals are negative.</p>
+
+    <div class="row">
+      <div class="field">
+        <label>Statement ending balance ($)</label>
+        <input type="text" class="money" id="bank-ending" placeholder="0.00">
+      </div>
+    </div>
+
+    <div class="import-box" id="import-bank">
+      <div class="row">
+        <strong>Import CSV:</strong>
+        <input type="file" accept=".csv,.txt" data-source="bank" class="csv-input">
+        <span class="hint-inline" style="color:var(--muted);font-size:13px">You'll confirm which column is which before anything is imported.</span>
+      </div>
+      <div class="mapping-panel" hidden></div>
+    </div>
+
+    <h3 class="section">Statement transactions</h3>
+    <div id="bank-table"></div>
+    <p><button class="btn secondary small" id="btn-add-bank">+ Add transaction</button></p>
+  </section>
+
+  <!-- ============ QUICKBOOKS ============ -->
+  <section class="tab-panel" id="panel-book">
+    <h2>QuickBooks trust ledger</h2>
+    <p class="hint">In QuickBooks, run the trust bank account register / transaction detail report for the
+       statement month and export it to CSV (or Excel, then save as CSV). Import it here. The ending balance
+       is your book balance as of the statement date &mdash; it auto-fills if the export has a running-balance
+       column, and you can type it directly.</p>
+
+    <div class="row">
+      <div class="field">
+        <label>Book (ledger) ending balance ($)</label>
+        <input type="text" class="money" id="book-ending" placeholder="0.00">
+      </div>
+    </div>
+
+    <div class="import-box" id="import-book">
+      <div class="row">
+        <strong>Import CSV:</strong>
+        <input type="file" accept=".csv,.txt" data-source="book" class="csv-input">
+      </div>
+      <div class="mapping-panel" hidden></div>
+    </div>
+
+    <h3 class="section">Book transactions</h3>
+    <div id="book-table"></div>
+    <p><button class="btn secondary small" id="btn-add-book">+ Add transaction</button></p>
+  </section>
+
+  <!-- ============ QUALIA ============ -->
+  <section class="tab-panel" id="panel-qualia">
+    <h2>Qualia client ledger balances</h2>
+    <p class="hint">In Qualia, run the <em>Trial Balance</em> (escrow trial balance) report for this trust
+       account as of the statement date and export it to CSV. Each open order/file should appear with its
+       ledger balance. The total of every client ledger must equal the bank and book balances.</p>
+
+    <div class="import-box" id="import-qualia">
+      <div class="row">
+        <strong>Import CSV:</strong>
+        <input type="file" accept=".csv,.txt" data-source="qualia" class="csv-input">
+      </div>
+      <div class="mapping-panel" hidden></div>
+    </div>
+
+    <h3 class="section">Client ledgers</h3>
+    <div id="qualia-table"></div>
+    <p><button class="btn secondary small" id="btn-add-ledger">+ Add ledger</button></p>
+  </section>
+
+  <!-- ============ RECONCILE ============ -->
+  <section class="tab-panel" id="panel-reconcile">
+    <h2>Three-way reconciliation</h2>
+    <p class="hint">The app matches bank and book transactions (by check number, then by amount and date),
+       computes outstanding items, and compares the three balances. Everything below updates automatically
+       from the data on the first three tabs.</p>
+    <div id="reconcile-output"></div>
+  </section>
+
+  <!-- ============ REPORT ============ -->
+  <section class="tab-panel" id="panel-report">
+    <div class="no-print" style="margin-bottom:16px">
+      <button class="btn" id="btn-print">Print / save as PDF</button>
+      <span style="color:var(--muted);font-size:13px;margin-left:10px">
+        Georgia Bar Rule 1.15 requires trust account records to be kept for six years &mdash; print or save
+        the signed report each month.</span>
+    </div>
+    <div id="report-content"></div>
+  </section>
+
+</main>
+
+<script src="js/csv.js"></script>
+<script src="js/reconcile.js"></script>
+<script src="js/sample-data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
