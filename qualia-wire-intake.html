@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wire Intake Assistant — Qualia (dds.qualia.io)</title>
+<!--
+  ============================================================================
+  WIRE INTAKE ASSISTANT for Qualia — internal use
+  ----------------------------------------------------------------------------
+  What it does
+    1. Asks for the Qualia file number (entered twice) plus a verification
+       question (property address + party last name) so data is matched to
+       the correct file before anything is shown.
+    2. Accepts a loan payoff statement or seller-proceeds wire instruction
+       as a dropped/browsed PDF, or as pasted text from an email.
+    3. Extracts the wiring fields (bank, ABA/routing, account number,
+       amounts, dates, references), validates the ABA routing checksum,
+       and cross-checks the document against the verification answers.
+    4. Presents each verified field with a one-click Copy button, ordered
+       to match Qualia's payoff / disbursement entry screens, plus a
+       printable audit summary.
+
+  Privacy / security
+    - Everything runs locally in the browser. No document, wire detail, or
+      credential is transmitted anywhere by this page.
+    - No Qualia username or password is requested or stored. Users log in
+      to dds.qualia.io themselves in their own browser session.
+    - PDF text extraction uses Mozilla pdf.js; scanned documents are read
+      with Tesseract OCR — both run entirely on the user's machine. The
+      libraries are fetched from public CDNs on first use; if your network
+      blocks CDNs, the copy/paste path still works with no internet at all.
+  ============================================================================
+-->
+<style>
+  :root {
+    --navy: #14263f;
+    --navy-2: #1d3557;
+    --accent: #2e6fdb;
+    --accent-dark: #1f56b5;
+    --ok: #1d7a46;
+    --ok-bg: #e7f5ec;
+    --warn: #a15c00;
+    --warn-bg: #fdf3e0;
+    --err: #b3261e;
+    --err-bg: #fdecea;
+    --ink: #1c2430;
+    --muted: #5c6675;
+    --line: #d8dee8;
+    --bg: #f2f5f9;
+    --card: #ffffff;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  header.app {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-2) 100%);
+    color: #fff;
+    padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header.app .brand { display: flex; align-items: center; gap: 14px; }
+  header.app .mark {
+    width: 42px; height: 42px; border-radius: 10px;
+    background: rgba(255,255,255,.12);
+    display: grid; place-items: center;
+    font-size: 22px;
+  }
+  header.app h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header.app .sub { font-size: 12.5px; opacity: .75; margin-top: 2px; }
+  header.app a.qualia-link {
+    color: #fff; text-decoration: none; font-size: 13.5px; font-weight: 600;
+    background: rgba(255,255,255,.14);
+    border: 1px solid rgba(255,255,255,.25);
+    padding: 8px 14px; border-radius: 8px;
+  }
+  header.app a.qualia-link:hover { background: rgba(255,255,255,.24); }
+
+  main { max-width: 880px; margin: 0 auto; padding: 26px 20px 80px; }
+
+  /* Stepper */
+  .stepper { display: flex; gap: 0; margin-bottom: 24px; }
+  .stepper .step {
+    flex: 1; text-align: center; position: relative; padding: 0 4px;
+    color: var(--muted); font-size: 12.5px; font-weight: 600;
+  }
+  .stepper .dot {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: #fff; border: 2px solid var(--line);
+    display: grid; place-items: center;
+    margin: 0 auto 6px; font-size: 13px; color: var(--muted);
+    position: relative; z-index: 1;
+  }
+  .stepper .step::before {
+    content: ""; position: absolute; top: 15px; left: -50%; width: 100%;
+    height: 2px; background: var(--line);
+  }
+  .stepper .step:first-child::before { display: none; }
+  .stepper .step.active .dot { border-color: var(--accent); color: var(--accent); }
+  .stepper .step.active { color: var(--accent); }
+  .stepper .step.done .dot { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .stepper .step.done { color: var(--ok); }
+  .stepper .step.done::before, .stepper .step.active::before { background: var(--ok); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 26px 28px;
+    box-shadow: 0 1px 3px rgba(20,38,63,.06);
+    margin-bottom: 18px;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 17px; }
+  .card .lead { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
+
+  label.f { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 5px; }
+  label.f .hint { font-weight: 400; color: var(--muted); }
+  input[type=text], textarea, select {
+    width: 100%; padding: 10px 12px; font-size: 15px;
+    border: 1.5px solid var(--line); border-radius: 8px;
+    font-family: inherit; color: var(--ink); background: #fff;
+  }
+  input[type=text]:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(46,111,219,.15); }
+  input.mono, textarea.mono { font-family: var(--mono); }
+  input.bad { border-color: var(--err); background: #fff8f8; }
+  input.good { border-color: var(--ok); }
+  .field-note { font-size: 12px; margin-top: 4px; }
+  .field-note.err { color: var(--err); }
+  .field-note.ok { color: var(--ok); }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .row2 { grid-template-columns: 1fr; } }
+
+  .radio-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 6px; }
+  @media (max-width: 640px) { .radio-cards { grid-template-columns: 1fr; } }
+  .radio-cards label {
+    border: 1.5px solid var(--line); border-radius: 10px; padding: 13px 15px;
+    cursor: pointer; display: flex; gap: 10px; align-items: flex-start;
+    background: #fff;
+  }
+  .radio-cards label:has(input:checked) { border-color: var(--accent); background: #f3f7ff; }
+  .radio-cards input { margin-top: 3px; }
+  .radio-cards .t { font-weight: 650; font-size: 14px; }
+  .radio-cards .d { font-size: 12.5px; color: var(--muted); }
+
+  button.primary, button.ghost, button.copybtn {
+    font-family: inherit; cursor: pointer; border-radius: 8px;
+    font-size: 14.5px; font-weight: 600;
+  }
+  button.primary {
+    background: var(--accent); color: #fff; border: none;
+    padding: 12px 26px;
+  }
+  button.primary:hover { background: var(--accent-dark); }
+  button.primary:disabled { background: #b9c6da; cursor: not-allowed; }
+  button.ghost {
+    background: #fff; color: var(--ink); border: 1.5px solid var(--line);
+    padding: 11px 20px;
+  }
+  button.ghost:hover { border-color: var(--muted); }
+  .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; gap: 12px; flex-wrap: wrap; }
+
+  /* Tabs (step 2) */
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tabs button {
+    font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    padding: 9px 18px; border-radius: 999px; border: 1.5px solid var(--line);
+    background: #fff; color: var(--muted);
+  }
+  .tabs button.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+
+  .dropzone {
+    border: 2.5px dashed var(--line); border-radius: 14px;
+    padding: 46px 24px; text-align: center; cursor: pointer;
+    background: #fafcfe; transition: all .15s ease;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: #f0f6ff; }
+  .dropzone .icon { font-size: 40px; margin-bottom: 8px; }
+  .dropzone .big { font-size: 16px; font-weight: 650; }
+  .dropzone .small { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .dropzone input { display: none; }
+
+  .progress { margin-top: 16px; display: none; }
+  .progress .bar-wrap { background: var(--line); border-radius: 999px; height: 8px; overflow: hidden; }
+  .progress .bar { background: var(--accent); height: 100%; width: 0%; transition: width .2s; }
+  .progress .msg { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+  .banner { border-radius: 10px; padding: 12px 16px; font-size: 13.5px; margin: 14px 0; display: flex; gap: 10px; align-items: flex-start; }
+  .banner.ok   { background: var(--ok-bg);   color: var(--ok);   border: 1px solid #bfe3cd; }
+  .banner.warn { background: var(--warn-bg); color: var(--warn); border: 1px solid #f0dcb2; }
+  .banner.err  { background: var(--err-bg);  color: var(--err);  border: 1px solid #f3c1bd; }
+  .banner b { font-weight: 700; }
+
+  /* Review table */
+  .fieldgrid { display: grid; grid-template-columns: 210px 1fr; gap: 10px 14px; align-items: center; }
+  @media (max-width: 640px) { .fieldgrid { grid-template-columns: 1fr; gap: 4px; } .fieldgrid .fl { margin-top: 10px; } }
+  .fieldgrid .fl { font-size: 13px; font-weight: 600; text-align: right; color: var(--muted); }
+  @media (max-width: 640px) { .fieldgrid .fl { text-align: left; } }
+  .found-tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .4px; border-radius: 4px; padding: 1px 6px; margin-left: 8px; vertical-align: middle; }
+  .found-tag.auto { background: #e3edfd; color: var(--accent-dark); }
+  .found-tag.manual { background: #f0f0f0; color: var(--muted); }
+
+  .checkline { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border: 1.5px solid var(--line); border-radius: 10px; margin-top: 18px; background: #fafcfe; }
+  .checkline input { width: 18px; height: 18px; margin-top: 2px; }
+  .checkline label { font-size: 14px; font-weight: 600; cursor: pointer; }
+
+  /* Copy screen */
+  .copyrow {
+    display: flex; align-items: center; gap: 12px;
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 10px; background: #fff;
+  }
+  .copyrow .lab { width: 200px; flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .copyrow .val { flex: 1; font-family: var(--mono); font-size: 15px; word-break: break-all; }
+  button.copybtn {
+    background: #fff; border: 1.5px solid var(--accent); color: var(--accent);
+    padding: 7px 16px; flex-shrink: 0; min-width: 88px;
+  }
+  button.copybtn:hover { background: #f0f6ff; }
+  button.copybtn.copied { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .copy-section-title { font-size: 12px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); margin: 22px 0 10px; }
+
+  .file-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: #eef3fb; border: 1px solid #d5e2f5; color: var(--navy);
+    font-size: 13px; font-weight: 600; border-radius: 999px; padding: 6px 14px;
+  }
+
+  .summary-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+
+  .fraud-note {
+    margin-top: 26px; padding: 14px 18px; border-radius: 10px;
+    background: #f6f2e8; border: 1px solid #e5dcc3; color: #6b5a2e; font-size: 12.5px;
+  }
+
+  .hidden { display: none !important; }
+
+  footer.app { text-align: center; font-size: 12px; color: var(--muted); padding: 20px; }
+
+  /* Print: only the audit summary */
+  #printArea { display: none; }
+  @media print {
+    body * { visibility: hidden; }
+    #printArea, #printArea * { visibility: visible; }
+    #printArea { display: block; position: absolute; top: 0; left: 0; width: 100%; padding: 24px; font-size: 12px; }
+    #printArea h1 { font-size: 17px; }
+    #printArea table { border-collapse: collapse; width: 100%; }
+    #printArea td { border: 1px solid #999; padding: 6px 10px; vertical-align: top; }
+    #printArea td:first-child { font-weight: 700; width: 220px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="app">
+  <div class="brand">
+    <div class="mark">🏛️</div>
+    <div>
+      <h1>Wire Intake Assistant</h1>
+      <div class="sub">Loan payoffs &amp; seller proceeds → Qualia · internal use only</div>
+    </div>
+  </div>
+  <a class="qualia-link" href="https://dds.qualia.io" target="_blank" rel="noopener">Open Qualia (dds.qualia.io) ↗</a>
+</header>
+
+<main>
+
+  <div class="stepper" id="stepper">
+    <div class="step" data-step="1"><div class="dot">1</div>File Verification</div>
+    <div class="step" data-step="2"><div class="dot">2</div>Wiring Document</div>
+    <div class="step" data-step="3"><div class="dot">3</div>Review &amp; Verify</div>
+    <div class="step" data-step="4"><div class="dot">4</div>Enter into Qualia</div>
+  </div>
+
+  <!-- ================= STEP 1 : FILE VERIFICATION ================= -->
+  <section class="card" id="panel1">
+    <h2>Step 1 — Which Qualia file is this for?</h2>
+    <p class="lead">Enter the file number twice, then answer the verification questions. The answers are cross-checked against the document in Step 3 so wire data can never be attached to the wrong file.</p>
+
+    <div class="row2">
+      <div>
+        <label class="f" for="fileNum">Qualia file number</label>
+        <input type="text" id="fileNum" class="mono" autocomplete="off" spellcheck="false" placeholder="e.g. 25-1042">
+      </div>
+      <div>
+        <label class="f" for="fileNum2">Re-enter file number <span class="hint">(typed, not pasted)</span></label>
+        <input type="text" id="fileNum2" class="mono" autocomplete="off" spellcheck="false" placeholder="type it again">
+        <div class="field-note" id="fileNumNote"></div>
+      </div>
+    </div>
+
+    <label class="f" for="propAddr">Verification — property street address on this file <span class="hint">(as shown in Qualia, street line only)</span></label>
+    <input type="text" id="propAddr" autocomplete="off" placeholder="e.g. 412 Maple Grove Ln">
+
+    <label class="f" for="partyName">Verification — borrower or seller last name on this file</label>
+    <input type="text" id="partyName" autocomplete="off" placeholder="e.g. Whitfield">
+
+    <label class="f">What kind of document are you entering?</label>
+    <div class="radio-cards">
+      <label><input type="radio" name="docType" value="payoff" checked>
+        <span><span class="t">Loan payoff statement</span><br><span class="d">Lender payoff with wire instructions, payoff amount, per-diem, good-through date.</span></span>
+      </label>
+      <label><input type="radio" name="docType" value="proceeds">
+        <span><span class="t">Seller proceeds wire</span><br><span class="d">Seller's instructions for remitting proceeds — beneficiary, bank, routing, account.</span></span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <span></span>
+      <button class="primary" id="toStep2" disabled>Continue →</button>
+    </div>
+  </section>
+
+  <!-- ================= STEP 2 : DOCUMENT INPUT ================= -->
+  <section class="card hidden" id="panel2">
+    <h2>Step 2 — Add the wiring document</h2>
+    <p class="lead">Drop the PDF here, browse for it, or paste the wiring text from an email. Everything is read locally on this computer — nothing is uploaded anywhere.</p>
+
+    <div style="margin-bottom:14px"><span class="file-chip" id="chip2">📁 File #—</span></div>
+
+    <div class="tabs">
+      <button id="tabPdf" class="on" type="button">📄 PDF (drag &amp; drop)</button>
+      <button id="tabPaste" type="button">📋 Paste text</button>
+    </div>
+
+    <div id="pdfPane">
+      <div class="dropzone" id="dropzone">
+        <div class="icon">📄</div>
+        <div class="big">Drag &amp; drop the payoff / wire PDF here</div>
+        <div class="small">or click to browse · scanned and faxed PDFs are OCR'd automatically</div>
+        <input type="file" id="fileInput" accept="application/pdf,.pdf">
+      </div>
+      <div class="progress" id="progress">
+        <div class="bar-wrap"><div class="bar" id="progressBar"></div></div>
+        <div class="msg" id="progressMsg">Reading…</div>
+      </div>
+      <div id="pdfError"></div>
+    </div>
+
+    <div id="pastePane" class="hidden">
+      <label class="f" for="pasteBox">Paste the wiring instructions <span class="hint">(from an email or document)</span></label>
+      <textarea id="pasteBox" class="mono" rows="12" spellcheck="false" placeholder="Paste the full wiring instructions here, e.g.&#10;&#10;Beneficiary: John Q. Seller&#10;Bank: First Example Bank&#10;ABA/Routing: 021000021&#10;Account: 000123456789 ..."></textarea>
+      <div class="actions">
+        <span></span>
+        <button class="primary" id="parsePaste">Extract fields →</button>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="ghost" id="back1">← Back</button>
+      <span></span>
+    </div>
+  </section>
+
+  <!-- ================= STEP 3 : REVIEW & VERIFY ================= -->
+  <section class="card hidden" id="panel3">
+    <h2>Step 3 — Review the extracted wire data</h2>
+    <p class="lead">Fields tagged <span class="found-tag auto">AUTO</span> were read from the document — check every one against the source. Fields tagged <span class="found-tag manual">ENTER</span> weren't found and need to be typed. Nothing moves forward until the verification checks pass.</p>
+
+    <div style="margin-bottom:14px"><span class="file-chip" id="chip3">📁 File #—</span></div>
+
+    <div id="verifyBanners"></div>
+
+    <div class="fieldgrid" id="fieldGrid"><!-- populated by JS --></div>
+
+    <div class="checkline">
+      <input type="checkbox" id="confirmChk">
+      <label for="confirmChk" id="confirmLabel">I compared every field above against the source document, and this data belongs to Qualia file #—.</label>
+    </div>
+
+    <div class="actions">
+      <button class="ghost" id="back2">← Back</button>
+      <button class="primary" id="toStep4" disabled>Continue to Qualia entry →</button>
+    </div>
+  </section>
+
+  <!-- ================= STEP 4 : COPY INTO QUALIA ================= -->
+  <section class="card hidden" id="panel4">
+    <div class="summary-head">
+      <div>
+        <h2>Step 4 — Enter into Qualia</h2>
+        <p class="lead" style="margin-bottom:0">Open the order in Qualia, then copy each field in order. Buttons turn green once copied.</p>
+      </div>
+      <a class="qualia-link" style="background:var(--navy);border:none" href="https://dds.qualia.io" target="_blank" rel="noopener">Open Qualia ↗</a>
+    </div>
+
+    <div style="margin:10px 0 4px"><span class="file-chip" id="chip4">📁 File #—</span></div>
+
+    <div id="copyList"><!-- populated by JS --></div>
+
+    <div class="actions">
+      <button class="ghost" id="back3">← Back</button>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="ghost" id="printBtn">🖨️ Print audit summary</button>
+        <button class="primary" id="startOver">Done — start a new document</button>
+      </div>
+    </div>
+
+    <div class="fraud-note">
+      <b>Wire-fraud reminder:</b> before releasing any wire, verify these instructions by calling the payee at an independently confirmed phone number (never a number taken from the emailed instructions themselves). Treat any last-minute change to wiring instructions as fraud until proven otherwise.
+    </div>
+  </section>
+
+  <div id="printArea"></div>
+</main>
+
+<footer class="app">
+  Runs entirely in your browser — no data leaves this computer. No Qualia credentials are stored or requested by this tool.
+</footer>
+
+<script>
+"use strict";
+/* ============================ STATE ============================ */
+const state = {
+  fileNum: "", propAddr: "", partyName: "", docType: "payoff",
+  rawText: "", sourceName: "", extracted: {}, values: {}
+};
+
+const $ = (id) => document.getElementById(id);
+
+/* ============================ FIELD SCHEMA ============================ */
+/* order matches the sequence Qualia's payoff / disbursement screens ask for */
+const FIELDS = [
+  { key:"payee",      label:"Payee / Lender name",        docs:["payoff"],            section:"Payoff details" },
+  { key:"loanNum",    label:"Loan number",                docs:["payoff"],            section:"Payoff details" },
+  { key:"amount",     label:"Payoff amount",              docs:["payoff"],            section:"Payoff details", kind:"money" },
+  { key:"goodThru",   label:"Good-through date",          docs:["payoff"],            section:"Payoff details" },
+  { key:"perDiem",    label:"Per-diem interest",          docs:["payoff"],            section:"Payoff details", kind:"money", optional:true },
+  { key:"beneficiary",label:"Beneficiary name",           docs:["payoff","proceeds"], section:"Wire instructions" },
+  { key:"amountP",    label:"Wire amount (if stated)",    docs:["proceeds"],          section:"Wire instructions", kind:"money", optional:true },
+  { key:"bank",       label:"Receiving bank name",        docs:["payoff","proceeds"], section:"Wire instructions" },
+  { key:"aba",        label:"ABA / routing number",       docs:["payoff","proceeds"], section:"Wire instructions", kind:"aba" },
+  { key:"account",    label:"Account number",             docs:["payoff","proceeds"], section:"Wire instructions", kind:"acct" },
+  { key:"ffc",        label:"For further credit / ref",   docs:["payoff","proceeds"], section:"Wire instructions", optional:true },
+  { key:"bankAddr",   label:"Bank address (if given)",    docs:["payoff","proceeds"], section:"Wire instructions", optional:true }
+];
+const activeFields = () => FIELDS.filter(f => f.docs.includes(state.docType));
+
+/* ============================ STEP NAVIGATION ============================ */
+let currentStep = 1;
+function goStep(n) {
+  currentStep = n;
+  for (let i = 1; i <= 4; i++) $("panel"+i).classList.toggle("hidden", i !== n);
+  document.querySelectorAll("#stepper .step").forEach(el => {
+    const s = +el.dataset.step;
+    el.classList.toggle("active", s === n);
+    el.classList.toggle("done", s < n);
+    el.querySelector(".dot").textContent = s < n ? "✓" : s;
+  });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* ============================ STEP 1 ============================ */
+function step1Valid() {
+  const a = $("fileNum").value.trim(), b = $("fileNum2").value.trim();
+  const note = $("fileNumNote");
+  const match = a !== "" && a === b;
+  if (b === "") { note.textContent = ""; $("fileNum2").className = "mono"; }
+  else if (match) { note.textContent = "✓ File numbers match"; note.className = "field-note ok"; $("fileNum2").className = "mono good"; }
+  else { note.textContent = "✗ Does not match the first entry"; note.className = "field-note err"; $("fileNum2").className = "mono bad"; }
+  const ok = match && $("propAddr").value.trim().length >= 3 && $("partyName").value.trim().length >= 2;
+  $("toStep2").disabled = !ok;
+  return ok;
+}
+["fileNum","fileNum2","propAddr","partyName"].forEach(id => $(id).addEventListener("input", step1Valid));
+$("fileNum2").addEventListener("paste", e => e.preventDefault());  // force re-typing
+document.querySelectorAll("input[name=docType]").forEach(r =>
+  r.addEventListener("change", () => { state.docType = document.querySelector("input[name=docType]:checked").value; }));
+
+$("toStep2").addEventListener("click", () => {
+  state.fileNum = $("fileNum").value.trim();
+  state.propAddr = $("propAddr").value.trim();
+  state.partyName = $("partyName").value.trim();
+  state.docType = document.querySelector("input[name=docType]:checked").value;
+  ["chip2","chip3","chip4"].forEach(id => $(id).textContent = "📁 File #" + state.fileNum);
+  goStep(2);
+});
+$("back1").addEventListener("click", () => goStep(1));
+$("back2").addEventListener("click", () => goStep(2));
+$("back3").addEventListener("click", () => goStep(3));
+
+/* ============================ STEP 2 : INPUT ============================ */
+$("tabPdf").addEventListener("click", () => { $("tabPdf").classList.add("on"); $("tabPaste").classList.remove("on"); $("pdfPane").classList.remove("hidden"); $("pastePane").classList.add("hidden"); });
+$("tabPaste").addEventListener("click", () => { $("tabPaste").classList.add("on"); $("tabPdf").classList.remove("on"); $("pastePane").classList.remove("hidden"); $("pdfPane").classList.add("hidden"); });
+
+const dz = $("dropzone");
+dz.addEventListener("click", () => $("fileInput").click());
+["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("drag"); }));
+["dragleave","drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("drag"); }));
+dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+$("fileInput").addEventListener("change", e => { const f = e.target.files[0]; if (f) handleFile(f); });
+
+$("parsePaste").addEventListener("click", () => {
+  const t = $("pasteBox").value.trim();
+  if (t.length < 20) { alert("Please paste the full wiring instructions first."); return; }
+  state.rawText = t; state.sourceName = "Pasted text";
+  runExtraction();
+});
+
+function setProgress(pct, msg) {
+  $("progress").style.display = "block";
+  $("progressBar").style.width = Math.round(pct) + "%";
+  $("progressMsg").textContent = msg;
+}
+function pdfFail(msg) {
+  $("progress").style.display = "none";
+  $("pdfError").innerHTML = '<div class="banner err">⚠️ <span><b>Could not read the PDF.</b> ' + msg +
+    ' You can still use the <b>Paste text</b> tab — open the PDF, select all, copy, and paste it there.</span></div>';
+}
+
+/* ---- lazy library loaders (CDN; only fetched when first needed) ---- */
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error("Could not load " + src));
+    document.head.appendChild(s);
+  });
+}
+let pdfjsReady = null;
+function ensurePdfjs() {
+  if (!pdfjsReady) pdfjsReady = loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js")
+    .then(() => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; });
+  return pdfjsReady;
+}
+let tessReady = null;
+function ensureTesseract() {
+  if (!tessReady) tessReady = loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+  return tessReady;
+}
+
+async function handleFile(file) {
+  $("pdfError").innerHTML = "";
+  if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) { pdfFail("That file is not a PDF."); return; }
+  state.sourceName = file.name;
+  setProgress(5, "Loading PDF reader…");
+  let pdf;
+  try {
+    await ensurePdfjs();
+    const buf = await file.arrayBuffer();
+    pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+  } catch (err) {
+    pdfFail("(" + (err.message || err) + ") — this often means the network blocks the PDF library, or the file is corrupted/password-protected.");
+    return;
+  }
+  try {
+    // Pass 1: embedded text
+    let text = "";
+    for (let p = 1; p <= pdf.numPages; p++) {
+      setProgress(5 + 45 * p / pdf.numPages, "Reading page " + p + " of " + pdf.numPages + "…");
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      let last = null, lines = [];
+      for (const item of tc.items) {
+        if (last !== null && Math.abs(item.transform[5] - last) > 4) lines.push("\n");
+        else if (lines.length) lines.push(" ");
+        lines.push(item.str);
+        last = item.transform[5];
+      }
+      text += lines.join("") + "\n";
+    }
+    // Pass 2: OCR if the PDF has little/no embedded text (scan or fax)
+    if (text.replace(/\s+/g, "").length < 40 * pdf.numPages) {
+      setProgress(52, "No embedded text found — running OCR (this stays on your computer)…");
+      await ensureTesseract();
+      const worker = await Tesseract.createWorker("eng");
+      text = "";
+      for (let p = 1; p <= pdf.numPages; p++) {
+        setProgress(52 + 45 * (p - 1) / pdf.numPages, "OCR on page " + p + " of " + pdf.numPages + "… (can take a minute)");
+        const page = await pdf.getPage(p);
+        const vp = page.getViewport({ scale: 2.2 });
+        const canvas = document.createElement("canvas");
+        canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+        const { data } = await worker.recognize(canvas);
+        text += data.text + "\n";
+      }
+      await worker.terminate();
+    }
+    setProgress(100, "Done.");
+    state.rawText = text;
+    runExtraction();
+  } catch (err) {
+    pdfFail("(" + (err.message || err) + ")");
+  }
+}
+
+/* ============================ EXTRACTION ============================ */
+function abaChecksumOk(d) {
+  if (!/^\d{9}$/.test(d)) return false;
+  const n = d.split("").map(Number);
+  return (3*(n[0]+n[3]+n[6]) + 7*(n[1]+n[4]+n[7]) + (n[2]+n[5]+n[8])) % 10 === 0;
+}
+
+/* find `label: value` (same line, or value on the next line) */
+function labelValue(text, labelRes, valueRe) {
+  const lines = text.split(/\n/);
+  for (let i = 0; i < lines.length; i++) {
+    for (const lre of labelRes) {
+      const m = lines[i].match(lre);
+      if (!m) continue;
+      const after = lines[i].slice(m.index + m[0].length).replace(/^[\s:#.\-–—]+/, "").trim();
+      const tryVal = (s) => { if (!s) return null; const vm = s.match(valueRe || /^(.{2,90})/); return vm ? vm[1].trim() : null; };
+      let v = tryVal(after);
+      if (!v && lines[i+1]) v = tryVal(lines[i+1].trim());
+      if (v) return v;
+    }
+  }
+  return null;
+}
+
+const MONEY_RE = /\$?\s?([\d]{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})/;
+const DATE_RE  = /((?:\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})|(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}))/i;
+
+function extractFields(text) {
+  const out = {};
+  const clean = (s) => s ? s.replace(/\s{2,}/g, " ").trim() : null;
+
+  // ABA / routing: label first, else any checksum-valid 9-digit number
+  let aba = labelValue(text, [/\b(?:ABA|routing)\s*(?:number|no|#|\/?\s*routing)?\b/i, /\bRTN\b/i], /(\d[\d\s\-]{7,14}\d)/);
+  if (aba) aba = aba.replace(/\D/g, "");
+  if (!aba || !abaChecksumOk(aba)) {
+    const cands = text.match(/\b\d{9}\b/g) || [];
+    aba = cands.find(abaChecksumOk) || aba;
+  }
+  out.aba = aba || null;
+
+  // Account number: labeled digits (avoid grabbing the ABA again)
+  let acct = labelValue(text, [/\b(?:account|acct|a\/c)\s*(?:number|no|#)?\b(?!\s*(?:name|type|title|holder))/i, /\bcredit\s+(?:to\s+)?account\b/i], /([\dXx*][\dXx*\s\-]{2,28}[\dXx*])/);
+  if (acct) acct = acct.replace(/[\s\-]/g, "");
+  if (acct && acct.replace(/\D/g, "").length < 4) acct = null;
+  if (acct === out.aba) acct = null;
+  out.account = acct || null;
+
+  out.bank = clean(labelValue(text, [/\b(?:receiving|beneficiary(?:'s)?|payee|wire\s*to|credit)\s+bank\b/i, /\bbank\s*name\b/i, /\bwire\s+(?:funds\s+)?to\b/i, /\bfinancial\s+institution\b/i],
+    /([A-Za-z][A-Za-z0-9 .,&'\/\-]{2,60})/));
+
+  out.beneficiary = clean(labelValue(text, [/\bbeneficiary\s*(?:name)?\b(?!\s*bank)/i, /\bcredit\s+(?:to|the\s+account\s+of)\b(?!\s*account)/i, /\bin\s+favor\s+of\b/i, /\baccount\s+(?:name|holder|title)\b/i, /\bpay(?:able)?\s+to\b/i],
+    /([A-Za-z][A-Za-z0-9 .,&'\/\-]{2,70})/));
+
+  out.ffc = clean(labelValue(text, [/\b(?:for\s+)?further\s+credit(?:\s+to)?\b|\bFFC\b/i, /\breference\s*(?:number|no|#|:)?\b/i, /\bOBI\b/i],
+    /([A-Za-z0-9][A-Za-z0-9 .,&'#\/\-]{2,70})/));
+
+  out.bankAddr = clean(labelValue(text, [/\bbank\s+address\b/i], /(.{6,90})/));
+
+  out.loanNum = clean(labelValue(text, [/\bloan\s*(?:number|no|#|account)\b/i, /\baccount\s*(?:number|no|#)?\s*(?:ending|ref)\b/i],
+    /([A-Za-z0-9][A-Za-z0-9\-]{3,20})/));
+
+  // Payoff amount: labeled first, else the largest dollar amount in the document
+  let amt = labelValue(text, [/\btotal\s+(?:amount\s+)?(?:to\s+pay\s*off|payoff|due)\b/i, /\bpayoff\s+(?:amount|total|balance|funds)\b/i, /\btotal\s+(?:amount\s+)?due\b/i, /\bamount\s+to\s+remit\b/i, /\bwire\s+amount\b/i], MONEY_RE);
+  if (!amt) {
+    const all = [...text.matchAll(/\$\s?([\d]{1,3}(?:,\d{3})*\.\d{2})/g)].map(m => m[1]);
+    if (all.length) amt = all.reduce((a, b) => (parseFloat(a.replace(/,/g,"")) >= parseFloat(b.replace(/,/g,"")) ? a : b));
+  }
+  out.amount = amt ? "$" + amt.replace(/^\$?\s*/, "") : null;
+  out.amountP = out.amount;
+
+  let pd = labelValue(text, [/\bper\s*[- ]?diem\b/i, /\bdaily\s+interest\b/i, /\binterest\s+per\s+day\b/i], MONEY_RE);
+  out.perDiem = pd ? "$" + pd.replace(/^\$?\s*/, "") : null;
+
+  out.goodThru = labelValue(text, [/\bgood\s+(?:through|thru|until)\b/i, /\bvalid\s+(?:through|thru|until)\b/i, /\bexpir(?:es|ation)\s*(?:date)?\b/i, /\bpayoff\s+date\b/i], DATE_RE);
+
+  out.payee = clean(labelValue(text, [/\b(?:remit|make\s+(?:checks?|payment)s?\s+payable)\s+to\b/i, /\blender\s*(?:name)?\b/i, /\bservicer\b/i], /([A-Za-z][A-Za-z0-9 .,&'\/\-]{2,70})/))
+    || out.beneficiary;
+
+  return out;
+}
+
+/* ============================ CROSS-CHECK ============================ */
+function norm(s) { return (s || "").toUpperCase().replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
+function crossChecks() {
+  const doc = norm(state.rawText);
+  const checks = [];
+  // address: street number + at least one street word of 3+ chars found in doc
+  const addrToks = norm(state.propAddr).split(" ").filter(t => t.length >= 3 || /^\d+$/.test(t));
+  const addrHit = addrToks.length > 0 && addrToks.filter(t => doc.includes(t)).length >= Math.min(2, addrToks.length);
+  checks.push({ ok: addrHit, label: "Property address “" + state.propAddr + "”",
+    okMsg: "found in the document", failMsg: "NOT found in the document" });
+  const nameHit = norm(state.partyName).length >= 2 && doc.includes(norm(state.partyName));
+  checks.push({ ok: nameHit, label: "Party last name “" + state.partyName + "”",
+    okMsg: "found in the document", failMsg: "NOT found in the document" });
+  return checks;
+}
+
+/* ============================ STEP 3 : REVIEW ============================ */
+function runExtraction() {
+  state.extracted = extractFields(state.rawText);
+  buildReview();
+  goStep(3);
+}
+
+function buildReview() {
+  const grid = $("fieldGrid");
+  grid.innerHTML = "";
+  for (const f of activeFields()) {
+    const found = state.extracted[f.key] || "";
+    const lab = document.createElement("div");
+    lab.className = "fl";
+    lab.innerHTML = f.label + (f.optional ? ' <span style="font-weight:400">(optional)</span>' : "") +
+      '<span class="found-tag ' + (found ? "auto" : "manual") + '">' + (found ? "AUTO" : "ENTER") + "</span>";
+    const wrap = document.createElement("div");
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.className = "mono"; inp.id = "fv_" + f.key;
+    inp.value = found; inp.autocomplete = "off"; inp.spellcheck = false;
+    if (!found && !f.optional) inp.placeholder = "not found — enter from the document";
+    const note = document.createElement("div");
+    note.className = "field-note"; note.id = "fn_" + f.key;
+    inp.addEventListener("input", () => validateField(f, inp, note));
+    wrap.appendChild(inp); wrap.appendChild(note);
+    grid.appendChild(lab); grid.appendChild(wrap);
+    validateField(f, inp, note);
+  }
+  // verification banners
+  const vb = $("verifyBanners");
+  vb.innerHTML = "";
+  for (const c of crossChecks()) {
+    vb.innerHTML += c.ok
+      ? '<div class="banner ok">✅ <span><b>Verified:</b> ' + c.label + " " + c.okMsg + ".</span></div>"
+      : '<div class="banner err">🛑 <span><b>Check failed:</b> ' + c.label + " was " + c.failMsg +
+        ". Make sure this document belongs to file #" + state.fileNum +
+        " — if it does (e.g. the document abbreviates the address), verify manually before continuing.</span></div>";
+  }
+  vb.innerHTML += '<div class="banner warn">🔍 Source: <b>' + (state.sourceName || "document") + "</b> — keep it open side-by-side while you review.</div>";
+  $("confirmLabel").textContent = "I compared every field above against the source document, and this data belongs to Qualia file #" + state.fileNum + ".";
+  $("confirmChk").checked = false;
+  step3Valid();
+}
+
+function validateField(f, inp, note) {
+  const v = inp.value.trim();
+  note.textContent = ""; note.className = "field-note"; inp.classList.remove("bad", "good");
+  if (f.kind === "aba" && v) {
+    const d = v.replace(/\D/g, "");
+    if (abaChecksumOk(d)) { note.textContent = "✓ Valid ABA routing checksum"; note.className = "field-note ok"; inp.classList.add("good"); }
+    else { note.textContent = "✗ Fails the ABA checksum — routing numbers self-verify, so re-check every digit"; note.className = "field-note err"; inp.classList.add("bad"); }
+  }
+  if (f.kind === "acct" && v && v.replace(/\D/g, "").length < 4) {
+    note.textContent = "✗ Account number looks too short"; note.className = "field-note err"; inp.classList.add("bad");
+  }
+  step3Valid();
+}
+
+function step3Valid() {
+  let ok = true;
+  for (const f of activeFields()) {
+    const el = $("fv_" + f.key);
+    if (!el) continue;
+    const v = el.value.trim();
+    if (!f.optional && !v) ok = false;
+    if (f.kind === "aba" && v && !abaChecksumOk(v.replace(/\D/g, ""))) ok = false;
+  }
+  if (!$("confirmChk").checked) ok = false;
+  $("toStep4").disabled = !ok;
+}
+$("confirmChk").addEventListener("change", step3Valid);
+
+$("toStep4").addEventListener("click", () => {
+  state.values = {};
+  for (const f of activeFields()) state.values[f.key] = $("fv_" + f.key).value.trim();
+  buildCopyScreen();
+  goStep(4);
+});
+
+/* ============================ STEP 4 : COPY ============================ */
+function buildCopyScreen() {
+  const list = $("copyList");
+  list.innerHTML = "";
+  let lastSection = null;
+  for (const f of activeFields()) {
+    const v = state.values[f.key];
+    if (!v) continue;
+    if (f.section !== lastSection) {
+      lastSection = f.section;
+      const h = document.createElement("div");
+      h.className = "copy-section-title"; h.textContent = f.section;
+      list.appendChild(h);
+    }
+    const row = document.createElement("div");
+    row.className = "copyrow";
+    row.innerHTML = '<div class="lab">' + f.label + '</div><div class="val"></div>';
+    row.querySelector(".val").textContent = v;
+    const btn = document.createElement("button");
+    btn.className = "copybtn"; btn.textContent = "Copy";
+    btn.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(v); }
+      catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = v; document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove();
+      }
+      btn.textContent = "Copied ✓"; btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2500);
+    });
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+  buildPrintArea();
+}
+
+function buildPrintArea() {
+  const rows = activeFields()
+    .filter(f => state.values[f.key])
+    .map(f => "<tr><td>" + f.label + "</td><td>" + escapeHtml(state.values[f.key]) + "</td></tr>")
+    .join("");
+  const checks = crossChecks()
+    .map(c => "<li>" + escapeHtml(c.label) + ": " + (c.ok ? "VERIFIED — " + c.okMsg : "MANUAL OVERRIDE — " + c.failMsg) + "</li>")
+    .join("");
+  $("printArea").innerHTML =
+    "<h1>Wire Intake Audit Summary — Qualia file #" + escapeHtml(state.fileNum) + "</h1>" +
+    "<p>Document type: " + (state.docType === "payoff" ? "Loan payoff statement" : "Seller proceeds wire") +
+    " &nbsp;·&nbsp; Source: " + escapeHtml(state.sourceName || "n/a") +
+    " &nbsp;·&nbsp; Prepared: " + new Date().toLocaleString() + "</p>" +
+    "<table>" + rows + "</table>" +
+    "<p><b>Verification checks:</b></p><ul>" + checks + "</ul>" +
+    "<p>Reviewer confirmed all fields against the source document before entry. " +
+    "Wire instructions must be independently verified by phone at a known-good number before funds are released.</p>" +
+    "<p style='margin-top:30px'>Reviewed by: ____________________________ &nbsp;&nbsp; Date: ______________</p>";
+}
+function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+$("printBtn").addEventListener("click", () => window.print());
+
+$("startOver").addEventListener("click", () => {
+  if (!confirm("Clear everything and start a new document?")) return;
+  location.reload();
+});
+
+/* warn before accidental close mid-workflow */
+window.addEventListener("beforeunload", (e) => {
+  if (currentStep > 1 && currentStep < 4) { e.preventDefault(); e.returnValue = ""; }
+});
+
+goStep(1);
+</script>
+</body>
+</html>
