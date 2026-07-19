@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qualia Payoff Uploader</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">QU</div>
+    <div>
+      <h1>Qualia Payoff Uploader</h1>
+      <p class="tagline">PDF &rarr; verified data &rarr; dds.qualia.io</p>
+    </div>
+  </div>
+  <div class="header-right">
+    <span id="connBadge" class="badge off">Not connected</span>
+    <button id="settingsBtn" class="ghost">Settings</button>
+  </div>
+</header>
+
+<nav id="stepper">
+  <div class="step active" data-step="1"><span class="num">1</span>Connect</div>
+  <div class="step" data-step="2"><span class="num">2</span>File Number</div>
+  <div class="step" data-step="3"><span class="num">3</span>Verify File</div>
+  <div class="step" data-step="4"><span class="num">4</span>Document</div>
+  <div class="step" data-step="5"><span class="num">5</span>Review</div>
+  <div class="step" data-step="6"><span class="num">6</span>Upload</div>
+</nav>
+
+<main>
+
+<!-- STEP 1: Connect -->
+<section id="panel1" class="panel active">
+  <h2>Sign in to Qualia</h2>
+  <p class="help">Your credentials are used once to open a Chrome window and log in to
+  <strong id="qualiaUrlLabel">dds.qualia.io</strong>. They are never saved anywhere.</p>
+  <div class="form-grid">
+    <label>Qualia username / email
+      <input type="text" id="qUser" autocomplete="username" placeholder="you@yourfirm.com">
+    </label>
+    <label>Qualia password
+      <input type="password" id="qPass" autocomplete="current-password" placeholder="••••••••••">
+    </label>
+  </div>
+  <div class="actions">
+    <button id="connectBtn" class="primary">Connect &amp; Log In</button>
+  </div>
+  <div id="mfaBox" class="notice hidden">
+    <strong>Two-factor step?</strong> If Qualia is asking for a verification code,
+    complete it in the Chrome window that just opened, then click
+    <button id="mfaContinueBtn" class="small">I'm logged in — Continue</button>
+  </div>
+</section>
+
+<!-- STEP 2: File number -->
+<section id="panel2" class="panel">
+  <h2>Enter the Qualia file number</h2>
+  <p class="help">The app will locate this order in Qualia and show you what it found,
+  so you can confirm it's the right file before anything is uploaded.</p>
+  <div class="form-row">
+    <input type="text" id="fileNumber" placeholder="e.g. 25-1042" class="big-input">
+    <button id="lookupBtn" class="primary">Look Up File</button>
+  </div>
+</section>
+
+<!-- STEP 3: Verify -->
+<section id="panel3" class="panel">
+  <h2>Is this the correct file?</h2>
+  <p class="help">Below is what the app found in Qualia for file
+  <strong id="verifyFileNum"></strong>. Check the property address and parties
+  carefully. Nothing will be uploaded until you confirm.</p>
+  <div id="verifyDetails" class="verify-details"></div>
+  <div class="screenshot-frame">
+    <img id="verifyScreenshot" alt="Qualia order page screenshot">
+  </div>
+  <div class="actions">
+    <button id="rejectFileBtn" class="ghost">No — search again</button>
+    <button id="confirmFileBtn" class="primary">Yes, this is the correct file</button>
+  </div>
+</section>
+
+<!-- STEP 4: Document -->
+<section id="panel4" class="panel">
+  <h2>Add the payoff or wiring document</h2>
+  <p class="help">Uploading to file <strong class="fileNumEcho"></strong>. Drop the PDF
+  below, or paste the text of the wiring instructions instead.</p>
+  <div class="doc-inputs">
+    <div id="dropZone" class="drop-zone">
+      <div class="dz-icon">&#8681;</div>
+      <p><strong>Drag &amp; drop the PDF here</strong></p>
+      <p class="muted">or</p>
+      <button id="browseBtn" class="ghost">Choose a file&hellip;</button>
+      <input type="file" id="fileInput" accept="application/pdf" hidden>
+      <p id="dzFileName" class="dz-filename"></p>
+    </div>
+    <div class="or-divider"><span>OR</span></div>
+    <div class="paste-zone">
+      <label for="pasteText"><strong>Paste the wiring information</strong></label>
+      <textarea id="pasteText" rows="12"
+        placeholder="Paste the payoff statement or wire instructions text here&hellip;"></textarea>
+    </div>
+  </div>
+  <div class="actions">
+    <button id="extractBtn" class="primary">Extract Information</button>
+  </div>
+  <p id="extractStatus" class="status hidden">Reading the document with AI&hellip; this takes 10&ndash;30 seconds.</p>
+</section>
+
+<!-- STEP 5: Review -->
+<section id="panel5" class="panel">
+  <h2>Review the extracted information</h2>
+  <p class="help">Compare every field against the original document — especially the
+  <strong>routing and account numbers</strong>. Edit anything that's wrong.
+  This is what will be entered into Qualia.</p>
+  <div id="warningsBox" class="warnings hidden"></div>
+  <div class="review-grid" id="reviewGrid"></div>
+  <div class="dest-picker">
+    <p><strong>Where should this go in Qualia?</strong></p>
+    <label class="radio"><input type="radio" name="dest" value="payoff"> Payoffs section (loan payoff)</label>
+    <label class="radio"><input type="radio" name="dest" value="disbursement"> Disbursements / wire out (seller proceeds)</label>
+  </div>
+  <div class="actions">
+    <button id="backToDocBtn" class="ghost">Back</button>
+    <button id="fillBtn" class="primary">Enter into Qualia&hellip;</button>
+  </div>
+  <p id="fillStatus" class="status hidden">Filling the Qualia form in the Chrome window&hellip;</p>
+</section>
+
+<!-- STEP 6: Upload / confirm save -->
+<section id="panel6" class="panel">
+  <h2>Final check before saving</h2>
+  <p class="help"><strong>Nothing is saved yet.</strong> The app has entered what it
+  could into the open Qualia form. Look at the Chrome window (and the screenshot below),
+  fix or paste any fields marked <span class="pill manual">manual</span> using the copy
+  buttons, then save.</p>
+  <div id="fillResults" class="fill-results"></div>
+  <div class="screenshot-frame">
+    <img id="fillScreenshot" alt="Qualia form screenshot">
+    <button id="refreshShotBtn" class="ghost small">Refresh screenshot</button>
+  </div>
+  <div class="actions">
+    <button id="cancelSaveBtn" class="ghost">I saved it myself / start another document</button>
+    <button id="saveBtn" class="primary danger-outline">Click Save in Qualia for me</button>
+  </div>
+  <div id="doneBox" class="notice success hidden">
+    <strong>Done.</strong> Verify the entry in Qualia, then you can
+    <button id="anotherDocBtn" class="small">upload another document</button> or
+    <button id="anotherFileBtn" class="small">switch to another file</button>.
+  </div>
+</section>
+
+</main>
+
+<!-- Settings modal -->
+<div id="settingsModal" class="modal hidden">
+  <div class="modal-card">
+    <h2>Settings</h2>
+    <label>Qualia URL
+      <input type="text" id="setQualiaUrl" placeholder="https://dds.qualia.io">
+    </label>
+    <label>Anthropic API key <span class="muted">(for AI PDF extraction — stored only on this computer)</span>
+      <input type="password" id="setApiKey" placeholder="sk-ant-...">
+    </label>
+    <p id="apiKeyHint" class="muted"></p>
+    <div class="actions">
+      <button id="closeSettingsBtn" class="ghost">Close</button>
+      <button id="saveSettingsBtn" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
